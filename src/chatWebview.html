@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Coder Pro Chat</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body {
+      background: #181a20; color: #e6e6e6; font-family: 'Inter','Segoe UI',Arial,sans-serif;
+      margin: 0; padding: 0; height: 100vh; display: flex;
+    }
+    #sidebar {
+      width: 240px; background: #1a1c23; display: flex; flex-direction: column;
+      padding: 1.5em .5em 1em 1.2em; gap: 2em; border-right: 1px solid #232b4d; height: 100vh;
+    }
+    #sidebar h2 { font-size: 1.2em; color: #b5ff7f; margin-bottom: 1.2em; font-weight: 700; }
+    #sidebar ul { list-style: none; padding: 0; margin: 0; }
+    #sidebar li {
+      margin-bottom: 1.1em; font-size: 1.08em; color: #e6e6e6; cursor: pointer;
+      transition: color .2s; display: flex; align-items: center; gap: .7em;
+    }
+    #sidebar li:hover { color: #20c997; }
+    #sidebar .library { margin-top: 2em; }
+    #sidebar .create-thread { color: #7fdfff; font-weight: 600; margin-top: .7em; cursor: pointer; }
+
+    #main { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; position: relative; }
+    #logo { font-size: 2.7em; font-weight: 700; color: #e6e6e6; margin-bottom: .7em; letter-spacing: .03em; text-align: center; }
+
+    #chat-box { width: 100%; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; }
+    #chat {
+      width: 100%; min-height: 220px; max-height: 360px; overflow-y: auto; background: transparent;
+      margin-bottom: 1.2em; padding: .5em .5em 0 .5em; display: flex; flex-direction: column; gap: 1.1em;
+    }
+    .message {
+      max-width: 80%; padding: 1em 1.5em; border-radius: 22px; word-break: break-word; font-size: 1.08em;
+      box-shadow: 0 4px 18px #0004; position: relative; line-height: 1.7; white-space: pre-line; display: inline-block;
+    }
+    .user { align-self: flex-end; background: linear-gradient(90deg,#2d8cff 0%,#00e0ff 100%); color: #fff; text-align: right; box-shadow: 0 2px 12px #2d8cff44; }
+    .ai   { align-self: flex-start; background: linear-gradient(90deg,#3d3e3e 0%,#232b4d 100%); color: #fff; text-align: left;  box-shadow: 0 2px 12px #9faaa744; }
+
+    pre, code { background: #23272f; color: #fffae3; border-radius: 10px; padding: .7em 1.1em; font-family: 'Fira Mono','Consolas',monospace; font-size: 1em; margin: .5em 0; display: block; overflow-x: auto; }
+
+    #inputRow {
+      width: 100%; display: flex; align-items: center; background: #23272f; border-radius: 16px;
+      padding: .7em 1.2em; gap: .7em; margin-bottom: 1.2em; box-shadow: 0 2px 8px #0002;
+    }
+    #prompt {
+      flex: 1; min-width: 120px; padding: .7em 1em; border-radius: 8px; border: 1px solid #444; background: #181a20; color: #fff; font-size: 1em; outline: none;
+    }
+    #send {
+      background: linear-gradient(90deg,#2d8cff 0%,#00e0ff 100%); color: #fff; font-weight: 600; border-radius: 8px; border: none; padding: .7em 1.2em; cursor: pointer; transition: all .2s; min-width: 80px;
+    }
+    #send:hover { box-shadow: 0 4px 12px #2d8cff44; }
+
+    #actionRow { width: 100%; display: flex; justify-content: center; gap: 1em; margin-bottom: 1.2em; flex-wrap: wrap; }
+    .action-btn {
+      background: #232b4d; color: #fff; border-radius: 8px; border: none; padding: .6em 1.3em; font-size: 1em; font-weight: 500; cursor: pointer; transition: background .2s;
+    }
+    .action-btn:hover { background: #20c997; color: #181a20; }
+
+    #loading { color: #20c997; font-style: italic; margin: .5em 0 0 1.5em; display: none; font-size: 1.1em; letter-spacing: .03em; animation: blink 1.2s linear infinite; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    /* Agent log/status */
+    #statusBox {
+      width: 100%; max-width: 720px; background: #1a1f2f; border: 1px solid #232b4d; border-radius: 12px;
+      padding: .8em 1em; margin-top: .4em; font-size: .95em; line-height: 1.5; display: none;
+    }
+    #statusBox .title { color: #b5ff7f; font-weight: 600; margin-bottom: .4em; }
+    #status { white-space: pre-wrap; }
+    @media (max-width: 900px) { #sidebar { display: none; } #main { padding-left: 0; } }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Home</h2>
+    <ul>
+      <li id="uploadFileBtn" style="color:#7fdfff;font-weight:600;cursor:pointer;">+ Upload File</li>
+      <li id="codeReviewBtn" style="color:#7fdfff;font-weight:600;cursor:pointer;">+ Run Code Review Agent</li>
+      <li id="bugFinderBtn" style="color:#7fdfff;font-weight:600;cursor:pointer;">+ Run Bug Finder</li>
+      <li id="refactorBtn" style="color:#7fdfff;font-weight:600;cursor:pointer;">+ Run Refactor Agent</li>
+      <li id="testGenBtn" style="color:#7fdfff;font-weight:600;cursor:pointer;">+ Generate Tests</li>
+      <li id="projectSummaryBtn" style="color:#7fdfff;font-weight:600;cursor:pointer;">+ Project Summary</li>
+    </ul>
+    <div class="library">
+      <div style="font-size:1.05em;color:#b5ff7f;margin-bottom:.5em;">Library</div>
+      <li class="create-thread">+ Create a Thread</li>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="logo">AI Coder Pro</div>
+
+    <div id="chat-box">
+      <div id="chat"></div>
+      <div id="loading">AI is typing...</div>
+
+      <div id="inputRow">
+        <input id="prompt" type="text" placeholder="Ask anything or @mention a Space" />
+        <button id="send">Send</button>
+      </div>
+
+      <div id="actionRow">
+        <button class="action-btn" id="troubleshoot">Troubleshoot</button>
+        <button class="action-btn" id="learn">Learn</button>
+        <button class="action-btn" id="factcheck">Fact Check</button>
+        <button class="action-btn" id="plan">Plan</button>
+        <!-- NEW: build & run autonomous agent -->
+        <button class="action-btn" id="runGoal">Build & Run Agent</button>
+      </div>
+
+      <div style="width:100%;display:flex;justify-content:center;gap:1em;margin-top:.7em;">
+        <button id="clearChat" style="background:#232b4d;color:#b5ff7f;border:none;padding:.7em 2em;border-radius:12px;font-size:1em;cursor:pointer;">Clear Chat</button>
+        <button id="indexWorkspace" style="background:#20c997;color:#181a20;border:none;padding:.7em 2em;border-radius:12px;font-size:1em;cursor:pointer;font-weight:600;">📚 Index Workspace</button>
+      </div>
+
+      <!-- Agent status/logs -->
+      <div id="statusBox">
+        <div class="title">Agent Status</div>
+        <div id="status"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    const chat = document.getElementById('chat');
+    const input = document.getElementById('prompt');
+    const sendBtn = document.getElementById('send');
+    const loading = document.getElementById('loading');
+    const statusBox = document.getElementById('statusBox');
+    const statusEl = document.getElementById('status');
+    let messages = [];
+
+    function renderMessages() {
+      chat.innerHTML = '';
+      for (const [i, msg] of messages.entries()) {
+        const div = document.createElement('div');
+        div.className = 'message ' + msg.role;
+        let content = msg.text;
+        if (msg.role === 'ai') content = marked.parse(content);
+        div.innerHTML = content;
+
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = '📋';
+        copyBtn.title = 'Copy message';
+        copyBtn.style.marginLeft = '0.7em';
+        copyBtn.style.background = 'none';
+        copyBtn.style.border = 'none';
+        copyBtn.style.cursor = 'pointer';
+        copyBtn.onclick = () => navigator.clipboard.writeText(msg.text);
+        div.appendChild(copyBtn);
+
+        chat.appendChild(div);
+      }
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function addMessage(role, text) {
+      messages.push({ role, text });
+      renderMessages();
+    }
+
+    function addStatus(line) {
+      statusBox.style.display = 'block';
+      statusEl.textContent += (statusEl.textContent ? '\n' : '') + line;
+    }
+
+    // Image paste support
+    let pastedImageData = null;
+    input.addEventListener('paste', function(e) {
+      const items = e.clipboardData.items;
+      for (let item of items) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          const reader = new FileReader();
+          reader.onload = function(event) {
+            pastedImageData = event.target.result;
+            let preview = document.getElementById('imagePreview');
+            if (!preview) {
+              preview = document.createElement('img');
+              preview.id = 'imagePreview';
+              preview.style.maxWidth = '120px';
+              preview.style.maxHeight = '80px';
+              preview.style.display = 'block';
+              preview.style.margin = '0.5em auto';
+              input.parentNode.insertBefore(preview, input);
+            }
+            preview.src = pastedImageData;
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    });
+
+    function sendPrompt() {
+      const prompt = input.value.trim();
+      if (!prompt && !pastedImageData) return;
+      addMessage('user', prompt + (pastedImageData ? '\n[Image attached]' : ''));
+      input.value = '';
+      loading.style.display = 'block';
+      vscode.postMessage({ type: 'prompt', prompt, image: pastedImageData });
+      const preview = document.getElementById('imagePreview');
+      if (preview) preview.remove();
+      pastedImageData = null;
+    }
+
+    sendBtn.onclick = sendPrompt;
+    input.addEventListener('keydown', function(e) {
+      if ((e.key === 'Enter' && !e.shiftKey) || (e.key === 'Enter' && e.ctrlKey)) {
+        e.preventDefault();
+        sendPrompt();
+      }
+    });
+
+    // Quick actions
+    document.getElementById('troubleshoot').onclick = () => addMessage('user', 'Troubleshoot');
+    document.getElementById('learn').onclick = () => addMessage('user', 'Learn');
+    document.getElementById('factcheck').onclick = () => addMessage('user', 'Fact Check');
+    document.getElementById('plan').onclick = () => addMessage('user', 'Plan');
+
+    document.getElementById('clearChat').onclick = () => {
+      messages = [];
+      renderMessages();
+      statusEl.textContent = '';
+      statusBox.style.display = 'none';
+      vscode.postMessage({ type: 'clearMemory' });
+    };
+
+    document.getElementById('indexWorkspace').onclick = () => {
+      addMessage('user', 'Indexing workspace for context-aware AI assistance...');
+      vscode.postMessage({ type: 'indexWorkspace' });
+    };
+
+    // File uploader
+    const uploadFileBtn = document.getElementById('uploadFileBtn');
+    if (uploadFileBtn) {
+      uploadFileBtn.onclick = () => {
+        const inputEl = document.createElement('input');
+        inputEl.type = 'file';
+        inputEl.accept = '.js,.ts,.py,.java,.cpp,.c,.cs,.go,.rb,.php,.rs,.swift,.kt,.m,.scala,.sh,.pl,.lua,.json,.yaml,.yml,.md,.txt';
+        inputEl.onchange = async () => {
+          const file = inputEl.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = function(event) {
+            const content = event.target.result;
+            vscode.postMessage({ type: 'fileUpload', files: [file.name], content });
+            addMessage('user', ` Uploaded file: ${file.name}`);
+          };
+          reader.readAsText(file);
+        };
+        inputEl.click();
+      };
+    }
+
+    // Smart-agent placeholders (kept for compatibility)
+    document.getElementById('codeReviewBtn').onclick = () => {
+      addMessage('user', 'Please run a code review agent on my project.');
+      vscode.postMessage({ type: 'prompt', prompt: 'Please run a code review agent on my project.' });
+    };
+    document.getElementById('bugFinderBtn').onclick = () => {
+      addMessage('user', 'Please run a bug finder agent on my project.');
+      vscode.postMessage({ type: 'prompt', prompt: 'Please run a bug finder agent on my project.' });
+    };
+    document.getElementById('refactorBtn').onclick = () => {
+      addMessage('user', 'Please run a refactor agent on my project.');
+      vscode.postMessage({ type: 'prompt', prompt: 'Please run a refactor agent on my project.' });
+    };
+    document.getElementById('testGenBtn').onclick = () => {
+      addMessage('user', 'Please generate unit tests for my project.');
+      vscode.postMessage({ type: 'prompt', prompt: 'Please generate unit tests for my project.' });
+    };
+    document.getElementById('projectSummaryBtn').onclick = () => {
+      addMessage('user', 'Please provide a project summary.');
+      vscode.postMessage({ type: 'prompt', prompt: 'Please provide a project summary.' });
+    };
+
+    // NEW: Build & Run Agent
+    document.getElementById('runGoal').onclick = () => {
+      const goal = input.value.trim() || 'Install dependencies, run the tests, and fix all failures.';
+      const successCriteria = 'All tests pass or the dev server runs without errors.';
+      addMessage('user', '▶️ Build & Run Agent: ' + goal);
+      statusEl.textContent = '';
+      statusBox.style.display = 'block';
+      vscode.postMessage({ type: 'runGoal', goal, successCriteria });
+    };
+
+    // Messages from extension
+    window.addEventListener('message', function(event) {
+      const message = event.data;
+      if (message.type === 'ai') {
+        addMessage('ai', message.text);
+        loading.style.display = 'none';
+      } else if (message.type === 'agentLog') {
+        addStatus(message.text);
+      } else if (message.type === 'agentDone') {
+        addStatus('✅ Agent finished.');
+      }
+    });
+  </script>
+</body>
+</html>
