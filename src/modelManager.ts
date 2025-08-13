@@ -1,5 +1,22 @@
 import { SupportedModel, ModelConfig, AIMessage, APIResponse } from './types';
 
+// Stub implementations for missing exports
+export class ToolUseOrchestrator {
+  constructor(model: any, tools: any) {
+    // Stub implementation
+  }
+  
+  async runLoop(args: any): Promise<any> {
+    // Stub implementation
+    return { ok: false, error: 'ToolUseOrchestrator not fully implemented' };
+  }
+}
+
+export function buildToolUseModel() {
+  // Stub implementation
+  return () => ({});
+}
+
 export class ModelManager {
   private configs: Record<SupportedModel, ModelConfig>;
 

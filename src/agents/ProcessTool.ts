@@ -3,12 +3,16 @@ import * as cp from 'child_process';
 import * as path from 'path';
 import { ToolResult } from './Tooling';
 
-export async function run_command(args: { cmd: string, cwd?: string, timeoutSec?: number }): Promise<ToolResult> {
-  const ws = vscode.workspace.workspaceFolders?.[0]; if (!ws) return { ok:false, error:'No workspace' };
-  const cwd = args.cwd ? path.join(ws.uri.fsPath, args.cwd) : ws.uri.fsPath;
-  const timeout = (args.timeoutSec ?? vscode.workspace.getConfiguration().get<number>('aiCoderPro.commandTimeoutSec') ?? 300) * 1000;
+export async function run_command(args: Record<string, any>): Promise<ToolResult> {
+  const cmd = args.cmd as string;
+  const cwd = args.cwd as string;
+  const timeoutSec = args.timeoutSec as number;
+  if (!cmd) {return { ok: false, error: 'cmd is required' };}
+  const ws = vscode.workspace.workspaceFolders?.[0]; if (!ws) {return { ok:false, error:'No workspace' };}
+  const cwdPath = cwd ? path.join(ws.uri.fsPath, cwd) : ws.uri.fsPath;
+  const timeout = (timeoutSec ?? vscode.workspace.getConfiguration().get<number>('aiCoderPro.commandTimeoutSec') ?? 300) * 1000;
   return new Promise((resolve) => {
-    const child = cp.spawn(args.cmd, { shell: true, cwd });
+    const child = cp.spawn(cmd, { shell: true, cwd: cwdPath });
     let out = ''; let err = '';
     const timer = setTimeout(() => { child.kill('SIGKILL'); resolve({ ok:false, error:`timeout after ${timeout/1000}s`, output: out }); }, timeout);
     child.stdout.on('data', d => out += d.toString());

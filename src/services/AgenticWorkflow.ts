@@ -3,8 +3,8 @@ import { RAGService } from './RAGService';
 import { ContextManager } from './ContextManager';
 
 /** === NEW: tool-using agent loop imports === */
-import { ToolRegistry, ToolName, ToolResult } from './agent/Tooling';
-import { ToolUseOrchestrator } from './modelManager'; // implements provider-agnostic tool-calling
+import { ToolRegistry, ToolName, ToolResult } from '../agents/Tooling';
+import { ToolUseOrchestrator } from '../modelManager'; // implements provider-agnostic tool-calling
 
 export interface Agent {
   name: string;
@@ -132,7 +132,7 @@ export class AgenticWorkflow {
     }
 
     const progress = (s: string) => {
-      if (onProgress) onProgress(s);
+      if (onProgress) {onProgress(s);}
       console.log(`[Agent] ${s}`);
     };
 
@@ -200,7 +200,7 @@ export class AgenticWorkflow {
     // You can read from VS Code config if desired; default to 6.
     try {
       // Lazy import to avoid hard dependency if not running within VS Code yet
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+       
       const vscode = require('vscode') as typeof import('vscode');
       return vscode.workspace.getConfiguration().get<number>('aiCoderPro.maxIters') ?? 6;
     } catch {

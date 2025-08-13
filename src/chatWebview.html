@@ -30,7 +30,7 @@
 
     #chat-box { width: 100%; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; }
     #chat {
-      width: 100%; min-height: 220px; max-height: 360px; overflow-y: auto; background: transparent;
+      width: 100%; min-height: 700px; max-height: 800px; overflow-y: auto; background: transparent;
       margin-bottom: 1.2em; padding: .5em .5em 0 .5em; display: flex; flex-direction: column; gap: 1.1em;
     }
     .message {
@@ -132,15 +132,45 @@
     const loading = document.getElementById('loading');
     const statusBox = document.getElementById('statusBox');
     const statusEl = document.getElementById('status');
-    let messages = [];
+
+    // --- State hydration & persistence (safe) ---
+    const _state = vscode.getState() || {};
+    // Prefer modern webview state `messages`; accept legacy `conversationMemory` shape
+    function normalizeStateMessages(raw) {
+      if (Array.isArray(raw)) return raw;
+      if (raw && typeof raw === 'object' && Array.isArray(raw.messages)) return raw.messages;
+      // legacy persisted conversationMemory from extension: map to webview shape
+      if (raw && typeof raw === 'object' && Array.isArray(raw.conversationMemory)) {
+        try {
+          return raw.conversationMemory.map(m => ({
+            role: m.role === 'assistant' ? 'ai' : (m.role === 'user' ? 'user' : (m.role || 'ai')),
+            text: m.content ?? ''
+          }));
+        } catch { /* fallthrough */ }
+      }
+      return [];
+    }
+    let messages = normalizeStateMessages(_state.messages ?? _state);
+
+    function saveState() {
+      vscode.setState({ ..._state, messages });
+    }
 
     function renderMessages() {
       chat.innerHTML = '';
-      for (const [i, msg] of messages.entries()) {
+      for (const msg of messages) {
         const div = document.createElement('div');
         div.className = 'message ' + msg.role;
-        let content = msg.text;
-        if (msg.role === 'ai') content = marked.parse(content);
+        const isAI = msg.role === 'ai';
+        let content = msg.text || '';
+        if (isAI) {
+          try { content = marked.parse(content); } catch { /* no-op */ }
+        } else {
+          content = content.replace(/&/g, '&amp;')
+                           .replace(/</g, '&lt;')
+                           .replace(/>/g, '&gt;')
+                           .replace(/\n/g, '<br/>');
+        }
         div.innerHTML = content;
 
         const copyBtn = document.createElement('button');
@@ -150,7 +180,7 @@
         copyBtn.style.background = 'none';
         copyBtn.style.border = 'none';
         copyBtn.style.cursor = 'pointer';
-        copyBtn.onclick = () => navigator.clipboard.writeText(msg.text);
+        copyBtn.onclick = () => navigator.clipboard.writeText(msg.text || '');
         div.appendChild(copyBtn);
 
         chat.appendChild(div);
@@ -159,7 +189,8 @@
     }
 
     function addMessage(role, text) {
-      messages.push({ role, text });
+      messages = [...messages, { role, text }];
+      saveState();
       renderMessages();
     }
 
@@ -223,6 +254,7 @@
 
     document.getElementById('clearChat').onclick = () => {
       messages = [];
+      saveState();
       renderMessages();
       statusEl.textContent = '';
       statusBox.style.display = 'none';
@@ -300,6 +332,9 @@
         addStatus('✅ Agent finished.');
       }
     });
+
+    // Initial render (after hydration)
+    renderMessages();
   </script>
 </body>
 </html>

@@ -3,8 +3,12 @@
   "displayName": "AI Coder Pro",
   "description": "\"AI-Powered VS Code Extension with Multi-Agent Orchestration\"",
   "version": "0.0.1",
-  "engines": { "vscode": "^1.102.0" },
-  "categories": ["Other"],
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onStartupFinished",
     "onCommand:ai-coder-pro.helloWorld",
@@ -15,71 +19,120 @@
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      { "command": "ai-coder-pro.helloWorld", "title": "Hello World" },
-      { "command": "aiCoderPro.generateCode", "title": "AI Coder: Generate Code from Prompt" },
-      { "command": "aiCoderPro.openChatPanel", "title": "AI Coder: Open Chat Panel" },
-      { "command": "aiCoderPro.summarizeCode", "title": "AI Coder: Summarize Selected Code" },
-      { "command": "aiCoderPro.explainCode", "title": "AI Coder: Explain Selected Code" },
-      { "command": "aiCoderPro.refactorCode", "title": "AI Coder: Refactor Selected Code" },
-      { "command": "aiCoderPro.projectWideRefactor", "title": "AI Coder: Project-Wide Refactor" },
-      { "command": "aiCoderPro.runGoal", "title": "AI Coder Pro: Build & Run Agent" }
+      {
+        "command": "ai-coder-pro.helloWorld",
+        "title": "Hello World"
+      },
+      {
+        "command": "aiCoderPro.generateCode",
+        "title": "AI Coder: Generate Code from Prompt"
+      },
+      {
+        "command": "aiCoderPro.openChatPanel",
+        "title": "AI Coder: Open Chat Panel"
+      },
+      {
+        "command": "aiCoderPro.summarizeCode",
+        "title": "AI Coder: Summarize Selected Code"
+      },
+      {
+        "command": "aiCoderPro.explainCode",
+        "title": "AI Coder: Explain Selected Code"
+      },
+      {
+        "command": "aiCoderPro.refactorCode",
+        "title": "AI Coder: Refactor Selected Code"
+      },
+      {
+        "command": "aiCoderPro.projectWideRefactor",
+        "title": "AI Coder: Project-Wide Refactor"
+      },
+      {
+        "command": "aiCoderPro.runGoal",
+        "title": "AI Coder Pro: Build & Run Agent"
+      }
     ],
     "configuration": {
       "type": "object",
       "title": "AI Coder Pro Configuration",
       "properties": {
         "aiCoderPro.togetherApiKey": {
-          "type": "string", "default": "",
+          "type": "string",
+          "default": "",
           "description": "Your Together AI API Key for code generation."
         },
         "aiCoderPro.perplexityApiKey": {
-          "type": "string", "default": "",
+          "type": "string",
+          "default": "",
           "description": "Your Perplexity API Key for code generation."
         },
         "aiCoderPro.grokApiKey": {
-          "type": "string", "default": "",
+          "type": "string",
+          "default": "",
           "description": "Your Groq (Grok) API Key for code generation."
         },
         "aiCoderPro.temperature": {
-          "type": "number", "default": 0.7,
+          "type": "number",
+          "default": 0.7,
           "description": "Sampling temperature for AI completions (0.0-2.0)."
         },
         "aiCoderPro.maxTokens": {
-          "type": "number", "default": 512,
+          "type": "number",
+          "default": 512,
           "description": "Maximum number of tokens for AI completions."
         },
-
         "aiCoderPro.applyMode": {
-          "type": "string", "enum": ["ask", "auto", "dry-run"],
+          "type": "string",
+          "enum": [
+            "ask",
+            "auto",
+            "dry-run"
+          ],
           "default": "ask",
           "description": "How file edits are applied by the agent."
         },
         "aiCoderPro.allowedPaths": {
-          "type": "array", "items": { "type": "string" },
-          "default": ["src", "app"],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "src",
+            "app"
+          ],
           "description": "Folders the agent may modify."
         },
         "aiCoderPro.deniedPaths": {
-          "type": "array", "items": { "type": "string" },
-          "default": [".git", "node_modules", "dist", "out"],
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            ".git",
+            "node_modules",
+            "dist",
+            "out"
+          ],
           "description": "Folders the agent must never touch."
         },
         "aiCoderPro.maxFilesPerIter": {
-          "type": "number", "default": 15,
+          "type": "number",
+          "default": 15,
           "description": "Max files the agent may touch per iteration."
         },
         "aiCoderPro.maxIters": {
-          "type": "number", "default": 6,
+          "type": "number",
+          "default": 6,
           "description": "Max agent iterations per run."
         },
         "aiCoderPro.commandTimeoutSec": {
-          "type": "number", "default": 300,
+          "type": "number",
+          "default": 300,
           "description": "Timeout for shell commands."
         }
       }
     }
   },
-
   "scripts": {
     "vscode:prepublish": "npm run package",
     "compile": "npm run check-types && npm run lint && node esbuild.js",
@@ -94,10 +147,9 @@
     "lint": "eslint src",
     "test": "vscode-test"
   },
-
   "devDependencies": {
     "@types/mocha": "^10.0.10",
-    "@types/node": "20.x",
+    "@types/node": "^20.19.10",
     "@types/node-fetch": "^2.6.12",
     "@types/vscode": "^1.102.0",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
@@ -115,6 +167,7 @@
     "@huggingface/inference": "^4.5.1",
     "@huggingface/transformers": "^3.6.3",
     "langchain": "^0.3.30",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "undici": "^7.13.0"
   }
 }

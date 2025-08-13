@@ -1,5 +1,5 @@
 // src/extension.ts
-/* eslint-disable @typescript-eslint/no-var-requires */
+
 import * as vscode from 'vscode';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
@@ -9,30 +9,53 @@ import * as fs from 'fs';
 import { BasicAgent } from './agents/BasicAgent';
 import { GrokAgent } from './agents/GrokAgent';
 import { RAGService } from './services/RAGService';
-import { ContextManager } from './services/ContextManager';
+import {
+  ContextManager,
+  normalizeMessages,
+  CONVERSATION_STORAGE_KEY,
+  type Message as CtxMessage
+} from './services/ContextManager';
 import { AgenticWorkflow } from './services/AgenticWorkflow';
 
 // === NEW: tool layer for Cursor-like autonomy ===
-import { ToolRegistry } from './agent/Tooling';
-import { read_file, write_file, delete_path, list_files, apply_patch } from './agent/FileSystemTool';
-import { run_command, kill_command } from './agent/ProcessTool';
-import { search_in_workspace } from './agent/SearchTool';
-import { get_diagnostics } from './agent/DiagnosticsTool';
-import { git_status, git_commit, git_revert } from './agent/GitTool';
+import { ToolRegistry } from './agents/Tooling';
+import { read_file, write_file, delete_path, list_files, apply_patch } from './agents/FileSystemTool';
+import { run_command, kill_command } from './agents/ProcessTool';
+import { search_in_workspace } from './agents/SearchTool';
+import { get_diagnostics } from './agents/DiagnosticsTool';
+import { git_status, git_commit, git_revert } from './agents/GitTool';
 
-// Try to import the provider-agnostic orchestrator (as proposed in modelManager.ts).
-// If not present yet, we’ll disable the runGoal entry with a friendly message.
+// Strict JSON extraction + instruction
+import {
+  extractProjectFromResponse,
+  extractProjectFromResponseLoose,
+  stripMarkdownFences,
+  STRUCTURED_OUTPUT_INSTRUCTION,
+  type GeneratedProject,
+  parseProjectFromAnyText,
+} from './utils/ModelIO';
+
+// File writer + runner
+import {
+  writeFilesPayload,
+  runPostInstallAndStart,
+  type AICoderJsonPayload // ← add this
+} from './agents/WorkspaceWriter';
+
+// Try to import the provider-agnostic orchestrator (./modelManager.ts)
 let ToolUseOrchestrator: any = undefined;
 let buildToolUseModel: any = undefined;
 try {
-  // These are expected from your updated ./modelManager.ts
   ({ ToolUseOrchestrator, buildToolUseModel } = require('./modelManager'));
 } catch {
-  // no-op; runGoal will gracefully explain how to enable autonomy
+  // orchestration optional; legacy and chat still work
 }
 
 // Load environment variables (optional .env in project root)
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
+
+// --- Local shape we already used in the webview plumbing ---
+type SimpleMsg = { role: 'user' | 'assistant'; content: string; timestamp: number };
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('AI Coder Pro extension is now active!');
@@ -40,9 +63,11 @@ export function activate(context: vscode.ExtensionContext) {
   // Initialize services
   const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
   const ragService = new RAGService(workspacePath);
-  const contextManager = new ContextManager(ragService);
+  const contextManager = new ContextManager(ragService, {
+    initialMessages: context.globalState.get(CONVERSATION_STORAGE_KEY)
+  });
 
-  // === NEW: Tool registry for agent loop ===
+  // === Tool registry for agent loop ===
   const tools = new ToolRegistry();
   tools.register('read_file', read_file);
   tools.register('write_file', write_file);
@@ -57,10 +82,10 @@ export function activate(context: vscode.ExtensionContext) {
   tools.register('git_commit', git_commit);
   tools.register('git_revert', git_revert);
 
-  // Build an orchestrator if modelManager is already upgraded
+  // Build an orchestrator if modelManager is present
   let orchestrator: any = undefined;
   if (ToolUseOrchestrator && buildToolUseModel) {
-    const toolModel = buildToolUseModel(); // provider-aware ToolUseModel (Groq/Together/OpenAI/Claude)
+    const toolModel = buildToolUseModel();
     orchestrator = new ToolUseOrchestrator(toolModel, tools);
   }
 
@@ -70,42 +95,60 @@ export function activate(context: vscode.ExtensionContext) {
     orchestrator
   });
 
-  // === Persistent memory for your existing chat flow (kept intact) ===
-  let conversationMemory: { role: 'user' | 'assistant'; content: string; timestamp: number }[] = [];
-  let projectAnalysis: { files: string[]; summary: string; lastAnalysis: number } | null = null;
+  // === Persistent memory for chat ===
+  const loadConversation = (): SimpleMsg[] => {
+    const asCtx = normalizeMessages(context.globalState.get(CONVERSATION_STORAGE_KEY));
+    return asCtx
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content,
+        timestamp: m.timestamp instanceof Date ? m.timestamp.getTime() : Date.now()
+      }));
+  };
+  const saveConversation = (mem: SimpleMsg[]) => {
+    const ctxMsgs: CtxMessage[] = mem.map((m) => ({
+      role: m.role,
+      content: m.content,
+      timestamp: new Date(m.timestamp)
+    }));
+    return ContextManager.saveToState(context, ctxMsgs);
+  };
 
-  // Load prior state
-  conversationMemory = context.globalState.get<typeof conversationMemory>('conversationMemory', []);
-  projectAnalysis = context.globalState.get<typeof projectAnalysis>('projectAnalysis', null);
+  let conversationMemory: SimpleMsg[] = loadConversation();
+  let projectAnalysis: { files: string[]; summary: string; lastAnalysis: number } | null =
+    context.globalState.get<typeof projectAnalysis>('projectAnalysis', null);
 
   const saveMemory = () => {
-    context.globalState.update('conversationMemory', conversationMemory);
+    void saveConversation(conversationMemory);
     context.globalState.update('projectAnalysis', projectAnalysis);
   };
 
-  // Hello command (unchanged)
+  // Hello command
   const helloDisposable = vscode.commands.registerCommand('ai-coder-pro.helloWorld', () => {
     vscode.window.showInformationMessage('Hello World from ai-coder-pro!');
   });
 
-  // Index workspace on activation (unchanged)
+  // Index workspace on activation
   ragService.indexWorkspace().then(() => {
     const stats = ragService.getStats();
     console.log(`📚 Workspace indexed: ${stats.totalDocuments} documents, ${stats.indexedTypes.length} file types`);
   });
 
-  // === NEW: Command palette entry for the autonomous agent run ===
+  // === Autonomous Agent command (Palette)
   const runGoalDisposable = vscode.commands.registerCommand('aiCoderPro.runGoal', async () => {
     const goal = await vscode.window.showInputBox({
       prompt: 'What should the agent build or fix?',
       value: 'Install deps, run the tests, and fix all failures.'
     });
-    if (!goal) return;
+    if (!goal) {
+      return;
+    }
 
     if (!orchestrator) {
       vscode.window.showWarningMessage(
-        'AI Coder Pro agent tools are ready, but the tool orchestrator is not configured. ' +
-        'Please update ./modelManager.ts to export { ToolUseOrchestrator, buildToolUseModel } as per the upgrade instructions.'
+        'Agent tools are ready, but the tool orchestrator is not configured. ' +
+          'Please update ./modelManager.ts to export { ToolUseOrchestrator, buildToolUseModel }.'
       );
       return;
     }
@@ -113,7 +156,10 @@ export function activate(context: vscode.ExtensionContext) {
     const channel = vscode.window.createOutputChannel('AI Coder Pro');
     channel.show(true);
     channel.appendLine('▶️ Starting autonomous agent…');
-    const onProgress = (line: string) => channel.appendLine(line);
+
+    const onProgress = (line: string) => {
+      channel.appendLine(line);
+    };
 
     try {
       await agenticWorkflow.runGoal(goal, 'All tests pass or the dev server runs without errors.', onProgress);
@@ -123,7 +169,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
 
-  // === Chat webview command (kept, with NEW runGoal message support) ===
+  // === Chat webview ===
   const chatPanelDisposable = vscode.commands.registerCommand('aiCoderPro.openChatPanel', () => {
     const panel = vscode.window.createWebviewPanel(
       'aiCoderProChat',
@@ -136,7 +182,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     let togetherKeyOverride: string | undefined = undefined;
 
-    // Smoke-test message to UI
+    // Smoke-test message
     setTimeout(() => {
       panel.webview.postMessage({
         type: 'ai',
@@ -153,7 +199,9 @@ export function activate(context: vscode.ExtensionContext) {
           }
 
           case 'setApiKeys': {
-            if (typeof message.togetherKey === 'string') togetherKeyOverride = message.togetherKey;
+            if (typeof message.togetherKey === 'string') {
+              togetherKeyOverride = message.togetherKey;
+            }
             break;
           }
 
@@ -177,23 +225,26 @@ export function activate(context: vscode.ExtensionContext) {
           case 'prompt': {
             const config = vscode.workspace.getConfiguration('aiCoderPro');
             const temperature = config.get<number>('temperature', 0.7);
-            const maxTokens = config.get<number>('maxTokens', 4096);
+            const maxTokens   = config.get<number>('maxTokens', 4096);
 
             // Provider keys
-            let togetherKey = togetherKeyOverride || config.get<string>('togetherApiKey') || process.env.TOGETHER_API_KEY;
+            let togetherKey =
+              togetherKeyOverride || config.get<string>('togetherApiKey') || process.env.TOGETHER_API_KEY;
             let grokApiKey = config.get<string>('grokApiKey') || process.env.GROQ_API_KEY;
 
             let response = '';
             try {
-              // AgenticWorkflow builds a context-aware prompt
+              // Build context-aware prompt
               const enhancedPrompt = await agenticWorkflow.executeWorkflow(message.prompt);
 
-              // Persist convo memory
-              if (message.image) {
-                conversationMemory.push({ role: 'user', content: `[Image attached]\n${message.prompt}`, timestamp: Date.now() });
-              } else {
-                conversationMemory.push({ role: 'user', content: message.prompt, timestamp: Date.now() });
-              }
+              // SAFE append user message + persist
+              const userMsg: SimpleMsg = {
+                role: 'user',
+                content: message.image ? `[Image attached]\n${message.prompt}` : message.prompt,
+                timestamp: Date.now()
+              };
+              conversationMemory = [...conversationMemory, userMsg];
+              saveMemory();
 
               // Thin recent context for provider call
               const analysisKeywords = /analysis|breakdown|summary|semantics|structure|refactor|in short/i;
@@ -217,19 +268,22 @@ export function activate(context: vscode.ExtensionContext) {
                 contextPrompt = `${systemPrompt}\n\n${enhancedPrompt}\n\nUser: ${message.prompt}`;
               }
 
+              // Enforce strict JSON file output (writer will parse and write)
+              const finalPrompt = `${contextPrompt}\n\n${STRUCTURED_OUTPUT_INSTRUCTION}`;
+
               // Pick provider
               const model = message.model || 'together';
               const groqModelMap: Record<string, string> = {
                 'grok-llama3-70b-8192': 'llama-3.3-70b-versatile',
-                'grok-llama3-8b-8192': 'llama-3.3-8b-instant',
+                'grok-llama3-8b-8192' : 'llama-3.3-8b-instant',
                 'grok-mixtral-8x7b-32768': 'mixtral-8x7b-32768',
-                'grok-gemma-7b-it': 'gemma-7b-it'
+                'grok-gemma-7b-it'    : 'gemma-7b-it'
               };
 
               if (model.startsWith('grok-')) {
                 if (!grokApiKey) {
                   panel.webview.postMessage({ type: 'ai', text: '❌ Groq API Key is required. Set it in Settings.' });
-                  return;
+                  break;
                 }
                 const groqModelName = groqModelMap[model] || 'llama-3.3-70b-versatile';
                 const agent = new GrokAgent(grokApiKey, groqModelName);
@@ -237,7 +291,7 @@ export function activate(context: vscode.ExtensionContext) {
                   role: m.role as 'user' | 'assistant' | 'system',
                   content: m.content
                 }));
-                grokMessages.push({ role: 'user', content: message.prompt });
+                grokMessages.push({ role: 'user', content: finalPrompt });
                 response = await agent.generateCompletionWithContext(grokMessages, { temperature, maxTokens });
               } else {
                 if (!togetherKey) {
@@ -245,15 +299,110 @@ export function activate(context: vscode.ExtensionContext) {
                     type: 'ai',
                     text: '❌ Together AI API Key is required. Please set your API key in settings (gear icon).'
                   });
-                  return;
+                  break;
                 }
                 const agent = new BasicAgent(togetherKey);
-                response = await agent.generateCompletion(contextPrompt, { temperature, maxTokens });
+                response = await agent.generateCompletion(finalPrompt, { temperature, maxTokens });
               }
 
-              conversationMemory.push({ role: 'assistant', content: response, timestamp: Date.now() });
-              saveMemory();
-              panel.webview.postMessage({ type: 'ai', text: response });
+             // ----------------- PARSE & WRITE (with auto-repair) -----------------
+/** One-shot repair: if parsing fails, ask the model to rewrite as valid AICODER_JSON. */
+const tryParseOrFix = async (raw: string): Promise<GeneratedProject | null> => {
+  // 1) Try our regular parser (handles tags, fenced, raw, and loose)
+  let project = parseProjectFromAnyText(raw);
+  if (project?.files?.length) {return project;}
+
+  // 2) Ask the model to rewrite as strict AICODER_JSON (no prose)
+  const repairPrompt = [
+    'Your last reply is NOT valid AICoder JSON.',
+    'Rewrite it ONLY as valid JSON wrapped in these tags (no prose, no Markdown, no extra text):',
+    '',
+    '<AICODER_JSON>',
+    '{',
+    '  "files": [',
+    '    { "path": "folder/name.ext", "content": "FULL FILE CONTENT (string)", "executable": false }',
+    '  ],',
+    '  "postInstall": "optional shell command",',
+    '  "start": "optional shell command"',
+    '}',
+    '</AICODER_JSON>',
+    '',
+    'Rules:',
+    '- Absolutely nothing outside the <AICODER_JSON> block.',
+    '- JSON must be syntactically valid.',
+    '- All file contents must be full text as a JSON string (escape quotes, use \\n for newlines).',
+    '- Use forward slashes in paths.',
+    '',
+    'Here is your previous reply to fix:',
+    '<RAW>',
+    raw,
+    '</RAW>'
+  ].join('\n');
+
+  let repaired = '';
+  if (model.startsWith('grok-')) {
+    const groqModelName = groqModelMap[model] || 'llama-3.3-70b-versatile';
+    const fixer = new GrokAgent(grokApiKey!, groqModelName);
+    repaired = await fixer.generateCompletionWithContext([{ role: 'user', content: repairPrompt }], {
+      temperature: 0,
+      maxTokens
+    });
+  } else {
+    const fixer = new BasicAgent(togetherKey!);
+    repaired = await fixer.generateCompletion(repairPrompt, { temperature: 0, maxTokens });
+  }
+
+  project = parseProjectFromAnyText(repaired);
+  return project ?? null;
+};
+
+const project = await tryParseOrFix(response);
+
+if (project && Array.isArray(project.files) && project.files.length > 0) {
+  try {
+    panel.webview.postMessage({ type: 'ai', text: '📝 Writing files to workspace…' });
+
+    // Normalize paths like "/foo/bar" -> "foo/bar"
+    project.files = project.files.map(f => ({
+      ...f,
+      path: f.path.replace(/^[/\\]+/, '')
+    }));
+
+    const payload: AICoderJsonPayload = {
+      files: project.files.map(f => ({
+        path: f.path,
+        content: f.content,
+        executable: f.executable
+      })),
+      postInstall: project.postInstall,
+      start: project.start
+    };
+
+    const { created, updated } = await writeFilesPayload(payload);
+    panel.webview.postMessage({
+      type: 'ai',
+      text: `✅ Files written. Created: ${created}, Updated: ${updated}.`
+    });
+
+    await runPostInstallAndStart(payload);
+  } catch (e: any) {
+    panel.webview.postMessage({
+      type: 'ai',
+      text: `❌ Failed writing files: ${e?.message || String(e)}`
+    });
+  }
+} else {
+  panel.webview.postMessage({
+    type: 'ai',
+    text:
+      '⚠️ Could not parse a file payload from the model response. ' +
+      'Tip: Ask again and include: “Return ONLY AICoder JSON, no prose.”\n\n' +
+      response
+  });
+}
+// ----------------- END PARSE & WRITE -----------------
+
+
             } catch (err: any) {
               console.error('Chat error:', err);
               panel.webview.postMessage({
@@ -272,7 +421,7 @@ export function activate(context: vscode.ExtensionContext) {
               return;
             }
             const temperature = config.get<number>('temperature', 0.7);
-            const maxTokens = config.get<number>('maxTokens', 4096);
+            const maxTokens   = config.get<number>('maxTokens', 8192);
 
             let prompt = '';
             if (message.action === 'summarize') {
@@ -297,37 +446,39 @@ export function activate(context: vscode.ExtensionContext) {
           }
 
           case 'fileUpload': {
-            conversationMemory.push({
+            const uploadMsg: SimpleMsg = {
               role: 'user',
               content: `Uploaded files: ${message.files.join(', ')}\n\nContent:\n${message.content}`,
               timestamp: Date.now()
-            });
+            };
+            conversationMemory = [...conversationMemory, uploadMsg];
             saveMemory();
             panel.webview.postMessage({
               type: 'ai',
-              text: `Files uploaded successfully. You can now use the autonomous agent to analyze these files along with your project.`
+              text:
+                'Files uploaded successfully. You can now use the autonomous agent to analyze these files along with your project.'
             });
             break;
           }
 
-          // === OLD "agentStart" one-shot flow retained for compatibility ===
+          // Legacy one-shot agent
           case 'agentStart': {
             panel.webview.postMessage({
               type: 'ai',
               text: '🤖 Agent (legacy one-shot) starting project scan…'
             });
-            await runLegacyOneShotAgent(panel, conversationMemory);
+            await runLegacyOneShotAgent(panel, conversationMemory, saveMemory);
             break;
           }
 
-          // === NEW: fully autonomous runGoal from WebView ===
+          // Autonomous runGoal from WebView
           case 'runGoal': {
             if (!orchestrator) {
               panel.webview.postMessage({
                 type: 'ai',
                 text:
                   '⚠️ Autonomous tools are ready, but the tool orchestrator is not configured.\n' +
-                  'Please update ./modelManager.ts to export { ToolUseOrchestrator, buildToolUseModel } (per upgrade instructions).'
+                  'Please update ./modelManager.ts to export { ToolUseOrchestrator, buildToolUseModel }.'
               });
               break;
             }
@@ -365,7 +516,7 @@ export function activate(context: vscode.ExtensionContext) {
     });
   });
 
-  // Generate code command (unchanged)
+  // Generate code command
   const generateCodeDisposable = vscode.commands.registerCommand('aiCoderPro.generateCode', async () => {
     const config = vscode.workspace.getConfiguration('aiCoderPro');
     let apiKey = config.get<string>('togetherApiKey') || process.env.TOGETHER_API_KEY;
@@ -407,13 +558,8 @@ export function activate(context: vscode.ExtensionContext) {
     );
   });
 
-  // Register all disposables
-  context.subscriptions.push(
-    helloDisposable,
-    chatPanelDisposable,
-    generateCodeDisposable,
-    runGoalDisposable
-  );
+  // Register disposables
+  context.subscriptions.push(helloDisposable, chatPanelDisposable, generateCodeDisposable, runGoalDisposable);
 }
 
 function getChatWebviewContent(): string {
@@ -422,12 +568,12 @@ function getChatWebviewContent(): string {
 }
 
 /**
- * Legacy "one-shot" agent flow kept for backward compatibility with your earlier bundle.
- * This does a single-pass analyze+apply without running commands / diagnostics.
+ * Legacy "one-shot" agent flow kept for backward compatibility.
  */
 async function runLegacyOneShotAgent(
   panel: vscode.WebviewPanel,
-  conversationMemory: { role: 'user' | 'assistant'; content: string; timestamp: number }[]
+  conversationMemory: SimpleMsg[],
+  saveMemory: () => void
 ) {
   try {
     panel.webview.postMessage({ type: 'ai', text: '📁 Scanning for code files…' });
@@ -453,7 +599,9 @@ async function runLegacyOneShotAgent(
         .replace(/#.*$/gm, '')
         .replace(/\n{2,}/g, '\n')
         .trim();
-      if (compressed.length > 3000) compressed = compressed.slice(0, 3000) + '\n… (truncated)';
+      if (compressed.length > 3000) {
+        compressed = compressed.slice(0, 3000) + '\n… (truncated)';
+      }
       chunks.push({ path: rel, content: compressed, type });
       projectStructure += `${rel} (${type})\n`;
     }
@@ -471,7 +619,6 @@ async function runLegacyOneShotAgent(
       `  File: <path>\n  Issues: <bulleted list>\n  Code:\n  <full revised content>\n---\n` +
       `- Do not include explanations outside that format.\n`;
 
-    // Use Together (BasicAgent) by default in this legacy path
     const cfg = vscode.workspace.getConfiguration('aiCoderPro');
     const apiKey = cfg.get<string>('togetherApiKey') || process.env.TOGETHER_API_KEY;
     if (!apiKey) {
@@ -491,7 +638,10 @@ async function runLegacyOneShotAgent(
     for (let i = 0; i < fileBlocks.length; i += 4) {
       if (fileBlocks[i] && fileBlocks[i + 1] && fileBlocks[i + 2] && fileBlocks[i + 3]) {
         const fileName = fileBlocks[i + 1].trim();
-        const issues = fileBlocks[i + 2].trim();
+        theIssues: {
+          const issues = fileBlocks[i + 2].trim();
+          totalIssues += issues.split('\n').length;
+        }
         let code = fileBlocks[i + 3].trim();
         code = code.replace(/```[\s\S]*?\n([\s\S]*?)```/g, '$1').trim();
 
@@ -504,7 +654,6 @@ async function runLegacyOneShotAgent(
             edit.replace(fileUri, fullRange, code);
             await vscode.workspace.applyEdit(edit);
             appliedCount++;
-            totalIssues += issues.split('\n').length;
           } else if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
             const newFileUri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders[0].uri, fileName);
             const edit = new vscode.WorkspaceEdit();
@@ -512,7 +661,6 @@ async function runLegacyOneShotAgent(
             edit.insert(newFileUri, new vscode.Position(0, 0), code);
             await vscode.workspace.applyEdit(edit);
             appliedCount++;
-            totalIssues += issues.split('\n').length;
           }
         } catch (e) {
           panel.webview.postMessage({ type: 'ai', text: `⚠️ Could not apply changes to ${fileName}: ${e}` });
@@ -525,7 +673,9 @@ async function runLegacyOneShotAgent(
       `📊 Results:\n- Files analyzed: ${chunks.length}\n- Files improved: ${appliedCount}\n- Total issues fixed: ${totalIssues}\n\n` +
       `🔧 Changes were applied to your workspace.`;
 
-    conversationMemory.push({ role: 'assistant', content: summary, timestamp: Date.now() });
+    conversationMemory = [...conversationMemory, { role: 'assistant', content: summary, timestamp: Date.now() }];
+    saveMemory();
+
     panel.webview.postMessage({ type: 'ai', text: summary });
   } catch (err: any) {
     panel.webview.postMessage({ type: 'ai', text: '❌ Agent error: ' + (err?.message || err) });
