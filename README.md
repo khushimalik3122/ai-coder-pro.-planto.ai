@@ -72,7 +72,7 @@ Follow these steps  in command prompt
 and sabse pahale together api set kar lenaa uper link dii hui h [together api](https://www.together.ai/)
 1. **Clone the Repository**
    ```sh
-   git clone https://github.com/khushimalik3122/ai-coder-pro
+   git clone https://github.com/khushimalik3122/ai-coder-pro.-planto.ai
    cd ai-coder-pro
    ```
 2. **Install Dependencies**
